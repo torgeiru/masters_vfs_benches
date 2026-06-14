@@ -64,6 +64,38 @@ struct BenchmarkResult {
   double throughput_mibps;
 };
 
+bool write_all(int fd, const void *buffer, size_t count) {
+  const unsigned char *bytes = static_cast<const unsigned char*>(buffer);
+  size_t progress = 0;
+
+  while (progress < count) {
+    ssize_t written = write(fd, bytes + progress, count - progress);
+    if (written <= 0) {
+      perror("write");
+      return false;
+    }
+    progress += static_cast<size_t>(written);
+  }
+
+  return true;
+}
+
+bool read_all(int fd, void *buffer, size_t count) {
+  unsigned char *bytes = static_cast<unsigned char*>(buffer);
+  size_t progress = 0;
+
+  while (progress < count) {
+    ssize_t read_bytes = read(fd, bytes + progress, count - progress);
+    if (read_bytes <= 0) {
+      perror("read");
+      return false;
+    }
+    progress += static_cast<size_t>(read_bytes);
+  }
+
+  return true;
+}
+
 void write_result(int results_fd, const struct BenchmarkResult& result) {
   std::string results_str  = std::format("{},{},{:.3f},{:.3f}\n",
     result.chunk_size,
@@ -72,36 +104,34 @@ void write_result(int results_fd, const struct BenchmarkResult& result) {
     result.throughput_mibps
   );
 
-  ssize_t written = write(results_fd, results_str.data(), results_str.size());
-  if (written != results_str.size()) {
+  if (!write_all(results_fd, results_str.data(), results_str.size())) {
     std::cerr << "Error writing result to file\n";
     std::exit(EXIT_FAILURE);
   }
 }
 
 void dump_file_copy(const char *filename, unsigned char *filebuf) {
-  int dump_fd = open(filename, O_CREAT | O_WRONLY, 777);
-  if (!dump_fd) {
+  int dump_fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, 0666);
+  if (dump_fd < 0) {
+    perror("open");
     std::cerr << "Failed to open/create file to be dumped!\n";
     return;
   }
 
-  ssize_t progress = 0;
-  ssize_t written_size;
+  size_t progress = 0;
   while(progress < FILESIZE) {
-    ssize_t to_write = FILESIZE - progress;
+    size_t to_write = FILESIZE - progress;
     if (to_write > LARGEST_CHUNK) {
       to_write = LARGEST_CHUNK;
     }
 
-    ssize_t written_size = write(dump_fd, &filebuf[progress], to_write);
-    if (written_size < 0) {
+    if (!write_all(dump_fd, &filebuf[progress], to_write)) {
       std::cerr << "Failed to dump any bytes in this write!\n";
       close(dump_fd);
       return;
     }
 
-    progress += written_size;
+    progress += to_write;
   }
 
   close(dump_fd);
@@ -109,12 +139,13 @@ void dump_file_copy(const char *filename, unsigned char *filebuf) {
 
 void read_file(unsigned char *filebuf) {
   int read_fd = open(testfile, O_RDONLY);
-  if (!read_fd) {
+  if (read_fd < 0) {
+    perror("open");
     std::cerr << "Failed to open read file!\n";
     return;
   }
 
-  if (read(read_fd, filebuf, FILESIZE) < FILESIZE) {
+  if (!read_all(read_fd, filebuf, FILESIZE)) {
     std::cerr << "Failed to read entire file!\n";
   }
 
@@ -139,7 +170,7 @@ int seq_chunk_bench(int results_fd, size_t chunk_size,
     if (read_direction) {
       test_fd = open(testfile, O_RDONLY | O_DIRECT);
     } else {
-      test_fd = open(seq_write_bench_copy, O_CREAT | O_WRONLY | O_DIRECT, 777);
+      test_fd = open(seq_write_bench_copy, O_CREAT | O_TRUNC | O_WRONLY | O_DIRECT, 0666);
     }
  
     if (test_fd < 0) {
@@ -150,22 +181,20 @@ int seq_chunk_bench(int results_fd, size_t chunk_size,
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    ssize_t cur_processed_bytes = 0;
+    size_t cur_processed_bytes = 0;
     while (cur_processed_bytes < FILESIZE) {
       size_t left_to_process = FILESIZE - cur_processed_bytes;
       size_t to_process = left_to_process > chunk_size ? chunk_size : left_to_process;
-      ssize_t newly_processed_size;
 
-      if (read_direction) {
-        newly_processed_size = read(test_fd, &chunk[cur_processed_bytes], to_process);
-      } else {
-        newly_processed_size = write(test_fd, &chunk[cur_processed_bytes], to_process);
-      }
-      if (newly_processed_size < to_process) {
-        std::cerr << "Processed " << newly_processed_size << " bytes but needed " << left_to_process << "\n";
+      bool processed = read_direction
+        ? read_all(test_fd, &chunk[cur_processed_bytes], to_process)
+        : write_all(test_fd, &chunk[cur_processed_bytes], to_process);
+
+      if (!processed) {
+        std::cerr << "Processed less than the requested " << to_process << " bytes\n";
         return -1;
       }
-      cur_processed_bytes += newly_processed_size;
+      cur_processed_bytes += to_process;
     }
 
     auto end = std::chrono::high_resolution_clock::now();
@@ -206,13 +235,13 @@ int seq_chunk_bench(int results_fd, size_t chunk_size,
 }
 
 int seq_read_benchmark() {
-  int results_fd = open(seq_read_bench, O_CREAT | O_WRONLY, 777);
+  int results_fd = open(seq_read_bench, O_CREAT | O_TRUNC | O_WRONLY, 0666);
   if (results_fd < 0) {
     perror("open");
     return -1;
   }
 
-  if (write(results_fd, csv_header, csv_header_len) <= 0) {
+  if (!write_all(results_fd, csv_header, csv_header_len)) {
     perror("write");
     return -1;
   }
@@ -236,13 +265,13 @@ int seq_read_benchmark() {
 }
 
 int seq_write_benchmark() {
-  int results_fd = open(seq_write_bench, O_CREAT | O_WRONLY, 777);
+  int results_fd = open(seq_write_bench, O_CREAT | O_TRUNC | O_WRONLY, 0666);
   if (results_fd < 0) {
     perror("open");
     return -1;
   }
 
-  if (write(results_fd, csv_header, csv_header_len) <= 0) {
+  if (!write_all(results_fd, csv_header, csv_header_len)) {
     perror("write");
     return -1;
   }
@@ -294,7 +323,7 @@ int rng_chunk_bench(int results_fd, size_t chunk_size,
     if (read_direction) {
       test_fd = open(testfile, O_RDONLY | O_DIRECT);
     } else {
-      test_fd = open(rng_write_bench_copy, O_CREAT | O_WRONLY | O_DIRECT, 777);
+      test_fd = open(rng_write_bench_copy, O_CREAT | O_TRUNC | O_WRONLY | O_DIRECT, 0666);
     }
 
     if (test_fd < 0) {
@@ -313,14 +342,11 @@ int rng_chunk_bench(int results_fd, size_t chunk_size,
       if (to_process > chunk_size)
         to_process = chunk_size;
 
-      ssize_t newly_processed;
-      if (read_direction) {
-        newly_processed = read(test_fd, &chunk[offset], to_process);
-      } else {
-        newly_processed = write(test_fd, &chunk[offset], to_process);
-      }
+      bool processed = read_direction
+        ? read_all(test_fd, &chunk[offset], to_process)
+        : write_all(test_fd, &chunk[offset], to_process);
 
-      if (newly_processed < to_process) {
+      if (!processed) {
         std::cerr << "Processed less bytes than expected!\n";
         return -1;
       }
@@ -363,13 +389,13 @@ int rng_chunk_bench(int results_fd, size_t chunk_size,
 }
 
 int rng_read_benchmark() {
-  int results_fd = open(rng_read_bench, O_CREAT | O_WRONLY, 777);
+  int results_fd = open(rng_read_bench, O_CREAT | O_TRUNC | O_WRONLY, 0666);
   if (results_fd < 0) {
     perror("open");
     return -1;
   }
 
-  if (write(results_fd, csv_header, csv_header_len) <= 0) {
+  if (!write_all(results_fd, csv_header, csv_header_len)) {
     perror("write");
     return -1;
   }
@@ -393,13 +419,13 @@ int rng_read_benchmark() {
 }
 
 int rng_write_benchmark() {
-  int results_fd = open(rng_write_bench, O_CREAT | O_RDWR, 777);
+  int results_fd = open(rng_write_bench, O_CREAT | O_TRUNC | O_RDWR, 0666);
   if (results_fd < 0) {
     perror("open");
     return -1;
   }
   
-  if (write(results_fd, csv_header, csv_header_len) <= 0) {
+  if (!write_all(results_fd, csv_header, csv_header_len)) {
     perror("write");
     return -1;
   }

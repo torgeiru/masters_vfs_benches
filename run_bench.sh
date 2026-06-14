@@ -1,21 +1,17 @@
 #!/bin/bash
 read -p "Path to IncludeOS (repro qemu programs): " INCLUDEOS_PATH
 
-read -p "Run benchmark on Linux VM? (yes|other[IncludeOS]): " USE_LINUX
-if [ "$USE_LINUX" = "yes" ]; then
-    USE_LINUX=true
-else
-    USE_LINUX=false
+read -p "Benchmark target (host|linux|includeos): " BENCH_TARGET
+if [ "$BENCH_TARGET" = "" ]; then
+    BENCH_TARGET="includeos"
 fi
 
 ls -l | grep benchmark
 read -p "What benchmark do you want to run: " BENCHMARK
 
-# Results directory
-RESULTS="./results"
-if [ ! -d "$RESULTS" ]; then
-    mkdir "$RESULTS"
-fi
+# Removing and creating a results directory
+rm -rf "./results"
+mkdir "results"
 
 # Setting up tmpfs
 TMP_DIR=$(mktemp -d -p /tmp virtiofs_share.XXXXXX)
@@ -32,7 +28,13 @@ if [ -d "$BENCHMARK/material" ]; then
 fi
 
 # Start system
-if [ "$USE_LINUX" = true ]; then
+if [ "$BENCH_TARGET" = "host" ]; then
+    echo "Building benchmark program ${BENCHMARK}/linux_drv.nix"
+    nix-build $BENCHMARK/linux_drv.nix --argstr includeos_path $INCLUDEOS_PATH
+    ln -sf "$SHARED_DIR" VirtioFS0
+    ./result/bin/virtiofs_bench
+    rm -r VirtioFS0
+elif [ "$BENCH_TARGET" = "linux" ]; then
     echo "Building benchmark program ${BENCHMARK}/linux_drv.nix"
     nix-build $BENCHMARK/linux_drv.nix --argstr includeos_path $INCLUDEOS_PATH
     cp ./result/bin/virtiofs_bench $SHARED_DIR
@@ -50,7 +52,6 @@ mkdir results
 cp -v -r $SHARED_DIR/*.csv results
 cp -v -r $SHARED_DIR/*.yuv results
 cp -v -r $SHARED_DIR/*_copy.bin results
-cp $SHARED_DIR/syncio_testing_file.chksum results
 
 # Cleanup
 sudo umount "$SHARED_DIR"
