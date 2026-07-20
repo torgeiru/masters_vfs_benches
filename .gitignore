@@ -1,2 +1,4 @@
 ubuntu_server
 *results
+syncio_benchmarks/material/syncio_testing_file.bin
+iouring_benchmark/material/syncio_testing_file.bin
