@@ -1,5 +1,4 @@
 #!/bin/bash
-read -p "Path to IncludeOS (repro qemu programs): " INCLUDEOS_PATH
 
 read -p "Benchmark target (host|linux|includeos): " BENCH_TARGET
 if [ "$BENCH_TARGET" = "" ]; then
@@ -30,16 +29,25 @@ fi
 # Start system
 if [ "$BENCH_TARGET" = "host" ]; then
     echo "Building benchmark program ${BENCHMARK}/linux_drv.nix"
-    nix-build $BENCHMARK/linux_drv.nix --argstr includeos_path $INCLUDEOS_PATH
+    nix-build $BENCHMARK/linux_drv.nix
     ln -sf "$SHARED_DIR" VirtioFS0
     ./result/bin/virtiofs_bench
     rm -r VirtioFS0
 elif [ "$BENCH_TARGET" = "linux" ]; then
     echo "Building benchmark program ${BENCHMARK}/linux_drv.nix"
-    nix-build $BENCHMARK/linux_drv.nix --argstr includeos_path $INCLUDEOS_PATH
+    nix-build $BENCHMARK/linux_drv.nix
     cp ./result/bin/virtiofs_bench $SHARED_DIR
-    nix-shell --argstr includeos_path $INCLUDEOS_PATH --run "./run_linux.py $SHARED_DIR"
+    nix-shell --run "./run_linux.py $SHARED_DIR"
 else
+    read -p "Use VirtioFS interrupts? (y/N): " USE_INTERRUPTS
+    if [ "$USE_INTERRUPTS" = "y" ] || [ "$USE_INTERRUPTS" = "Y" ]; then
+        USE_INTERRUPTS="true"
+        VIRTIOFS_DRIVER="interrupts"
+    else
+        USE_INTERRUPTS="false"
+        VIRTIOFS_DRIVER="polling"
+    fi
+
     read -p "Use patched VirtioFSD? (y/N): " USE_PATCHED_VIRTIOFSD
     if [ "$USE_PATCHED_VIRTIOFSD" = "y" ] || [ "$USE_PATCHED_VIRTIOFSD" = "Y" ]; then
         USE_PATCHED_VIRTIOFSD="true"
@@ -47,10 +55,10 @@ else
         USE_PATCHED_VIRTIOFSD="false"
     fi
 
-    echo "Building unikernel ${BENCHMARK}/includeos_drv.nix"
-    nix-build $BENCHMARK/includeos_drv.nix --argstr includeos_path $INCLUDEOS_PATH
+    echo "Building unikernel ${BENCHMARK}/includeos_drv.nix with ${VIRTIOFS_DRIVER}"
+    nix-build $BENCHMARK/includeos_drv.nix --arg use_interrupts $USE_INTERRUPTS
     cp ./result/bin/virtiofs_bench $SHARED_DIR
-    nix-shell --argstr includeos_path $INCLUDEOS_PATH --arg use_patched_virtiofsd $USE_PATCHED_VIRTIOFSD --run "./run_includeos.py $SHARED_DIR"
+    nix-shell --arg use_patched_virtiofsd $USE_PATCHED_VIRTIOFSD --run "./run_includeos.py $SHARED_DIR"
 fi
 
 rm -rf ./result

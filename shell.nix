@@ -1,5 +1,5 @@
 {
-  includeos_path ? "",
+  includeos_path ? import ./includeos_source.nix,
   use_patched_virtiofsd ? false,
 }
 :
